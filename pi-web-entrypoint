@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+
+if [ -z "$PI_WEB_PASSWORD" ] && [ "$PI_WEB_INSECURE_NO_PASSWORD" != 1 ]; then
+  echo "错误: 未设置 PI_WEB_PASSWORD。没有密码时任何能访问端口的人都能让 agent 执行命令。" >&2
+  echo "确实只在可信网络内使用，可设置 PI_WEB_INSECURE_NO_PASSWORD=1 跳过此检查。" >&2
+  exit 1
+fi
+
+exec pi-web --hostname 0.0.0.0 --no-open "$@"

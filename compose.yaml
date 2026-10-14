@@ -1,0 +1,16 @@
+services:
+  pi-web:
+    image: ghcr.io/insulinocytus/docker-pi-web:latest
+    restart: unless-stopped
+    ports:
+      # 放在同机反向代理后面时改成 "127.0.0.1:30141:30141"
+      - "30141:30141"
+    environment:
+      PI_WEB_PASSWORD: ${PI_WEB_PASSWORD:?请设置 PI_WEB_PASSWORD}
+      PI_WEB_ALLOWED_HOSTS: ${PI_WEB_ALLOWED_HOSTS:-}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - home:/home/pi
+
+volumes:
+  home:

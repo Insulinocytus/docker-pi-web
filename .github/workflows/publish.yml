@@ -1,0 +1,91 @@
+name: publish
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md", "docs/**", "LICENSE"]
+  workflow_dispatch:
+  schedule:
+    # 每天检查 npm，有新版本才构建；每周一无条件重建，拿到基础镜像的安全补丁
+    - cron: "17 3 * * *"
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: read
+      actions: write
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      image: ${{ steps.meta.outputs.image }}
+      build: ${{ steps.meta.outputs.build }}
+    steps:
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # 公开仓库 60 天无活动会停用定时任务，重新 enable 一次以续期（不产生提交）
+      - if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/publish.yml/enable"
+      - id: meta
+        run: |
+          version=$(npm view @agegr/pi-web version)
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          build=true
+          if [ "$GITHUB_EVENT_NAME" = schedule ] && [ "$(date -u +%u)" != 1 ] \
+            && docker manifest inspect "$image:$version" >/dev/null 2>&1; then
+            build=false
+          fi
+          echo "pi-web $version, build=$build"
+          {
+            echo "version=$version"
+            echo "image=$image"
+            echo "build=$build"
+          } >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: 构建 amd64 镜像用于冒烟测试
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: smoke
+          build-args: PI_WEB_VERSION=${{ needs.check.outputs.version }}
+      - name: 冒烟测试
+        run: bash test/smoke.sh smoke
+      - name: 构建并推送多架构镜像
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: PI_WEB_VERSION=${{ needs.check.outputs.version }}
+          tags: |
+            ${{ needs.check.outputs.image }}:${{ needs.check.outputs.version }}
+            ${{ needs.check.outputs.image }}:latest
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.check.outputs.version }}
